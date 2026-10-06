@@ -1,7 +1,7 @@
-"""Capture layer — Tracker API (Phase 2)."""
+"""Capture layer — Tracker API."""
 
 from __future__ import annotations
 
-# from failtree.capture.tracker import Tracker
-# __all__ = ["Tracker"]
-__all__ = []
+from failtree.capture.tracker import ItemHandle, Tracker
+
+__all__ = ["ItemHandle", "Tracker"]

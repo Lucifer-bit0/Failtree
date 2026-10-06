@@ -2,33 +2,65 @@
 
 Local-first error capture for data/ETL pipelines: record per-item outcomes, group root causes, inspect exception trees, export retry lists.
 
+## Install
+
+```bash
+pip install "git+https://github.com/Lucifer-bit0/Failtree.git"
+# or from a clone:
+pip install -e ".[dev]"
+```
+
+## Quick start
+
 ```python
 from failtree import Tracker
 
-t = Tracker("runs.db", label="nightly")
+t = Tracker("runs.db", label="nightly", continue_on_error=True)
 with t:
-    with t.item("file.csv", stage="parse"):
-        process("file.csv")
+    for path in files:
+        with t.item(path, stage="parse"):
+            process(path)
+
+print(t.summary())
 ```
 
-> **Status:** Phase 1 in progress — `core` (storage + fingerprinting). `Tracker` lands in Phase 2.
+Decorator form:
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for HLD/LLD/roadmap.
+```python
+@t.track(stage="parse")
+def process(path: str) -> None:
+    ...
+```
 
-## Install (dev)
+## CLI
 
 ```bash
-pip install -e ".[dev]"
-pytest
+failtree summary runs.db
+failtree export runs.db -o retry.txt --stage parse --failed-type ValueError
 ```
+
+## Demo
+
+```bash
+python examples/fake_pipeline.py
+failtree summary examples/fake_runs.db
+```
+
+## Status
+
+- **Phase 1:** core storage + fingerprinting  
+- **Phase 2:** Tracker capture, exception chains, CLI summary/export  
+- **Phase 3:** Textual TUI (next)
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Layout
 
 ```
 src/failtree/
-  common/    # shared atomic helpers (time, hash, json, paths)
+  common/    # shared atomic helpers
   core/      # models, schema, storage, fingerprint, grouping
-  capture/   # Tracker API (Phase 2)
+  capture/   # Tracker, chains, concurrency
   viewer/    # Textual TUI (Phase 3)
   cli.py
 ```

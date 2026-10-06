@@ -130,6 +130,30 @@ class Storage:
 
     # --- items --------------------------------------------------------------
 
+    def ensure_item(self, run_id: int, key: str, stage: str = "") -> int:
+        """Get or create an item without bumping attempts or finalizing status."""
+        now = utc_now_iso()
+        with self._transaction() as conn:
+            existing = conn.execute(
+                """
+                SELECT id FROM items
+                WHERE run_id = ? AND key = ? AND stage = ?
+                """,
+                (run_id, key, stage),
+            ).fetchone()
+            if existing is not None:
+                return int(existing["id"])
+            cur = conn.execute(
+                """
+                INSERT INTO items(
+                    run_id, key, stage, status, attempts, started_at, ended_at
+                )
+                VALUES (?, ?, ?, ?, 0, ?, NULL)
+                """,
+                (run_id, key, stage, ItemStatus.OK.value, now),
+            )
+            return int(cur.lastrowid)
+
     def upsert_item(
         self,
         run_id: int,
@@ -241,6 +265,17 @@ class Storage:
             ORDER BY id
             """,
             (parent_error_id,),
+        ).fetchall()
+        return [self._row_to_error(r) for r in rows]
+
+    def list_errors_for_item(self, item_id: int) -> List[ErrorRecord]:
+        rows = self._conn.execute(
+            """
+            SELECT * FROM errors
+            WHERE item_id = ?
+            ORDER BY id
+            """,
+            (item_id,),
         ).fetchall()
         return [self._row_to_error(r) for r in rows]
 
