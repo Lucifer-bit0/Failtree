@@ -1,0 +1,76 @@
+[
+  {
+    "id": "uuid-a",
+    "exc_type": "ValueError",
+    "message": "bad id 550e8400-e29b-41d4-a716-446655440000",
+    "frames": [
+      {"file": "/proj/pipeline/parse.py", "func": "parse_row", "line": 10},
+      {"file": "/usr/lib/python3.11/json/__init__.py", "func": "loads", "line": 346}
+    ],
+    "expect_group": "G1"
+  },
+  {
+    "id": "uuid-b",
+    "exc_type": "ValueError",
+    "message": "bad id 123e4567-e89b-12d3-a456-426614174000",
+    "frames": [
+      {"file": "/proj/pipeline/parse.py", "func": "parse_row", "line": 99},
+      {"file": "/usr/lib/python3.11/json/__init__.py", "func": "loads", "line": 346}
+    ],
+    "expect_group": "G1"
+  },
+  {
+    "id": "path-num",
+    "exc_type": "ValueError",
+    "message": "cannot parse /data/in/file_42.csv at row 17",
+    "frames": [
+      {"file": "/proj/pipeline/parse.py", "func": "parse_row", "line": 10}
+    ],
+    "expect_group": "G2"
+  },
+  {
+    "id": "path-num-2",
+    "exc_type": "ValueError",
+    "message": "cannot parse /data/in/other_99.csv at row 3",
+    "frames": [
+      {"file": "/proj/pipeline/parse.py", "func": "parse_row", "line": 44}
+    ],
+    "expect_group": "G2"
+  },
+  {
+    "id": "different-type",
+    "exc_type": "KeyError",
+    "message": "bad id 550e8400-e29b-41d4-a716-446655440000",
+    "frames": [
+      {"file": "/proj/pipeline/parse.py", "func": "parse_row", "line": 10}
+    ],
+    "expect_group": "G3"
+  },
+  {
+    "id": "different-func",
+    "exc_type": "ValueError",
+    "message": "bad id 550e8400-e29b-41d4-a716-446655440000",
+    "frames": [
+      {"file": "/proj/pipeline/validate.py", "func": "check_row", "line": 5}
+    ],
+    "expect_group": "G4"
+  },
+  {
+    "id": "quoted",
+    "exc_type": "RuntimeError",
+    "message": "user 'alice' not found",
+    "frames": [
+      {"file": "/proj/pipeline/auth.py", "func": "lookup", "line": 1}
+    ],
+    "expect_group": "G5"
+  },
+  {
+    "id": "quoted-2",
+    "exc_type": "RuntimeError",
+    "message": "user 'bob' not found",
+    "frames": [
+      {"file": "/proj/pipeline/auth.py", "func": "lookup", "line": 8}
+    ],
+    "expect_group": "G5"
+  }
+]
