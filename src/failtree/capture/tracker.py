@@ -18,10 +18,12 @@ from failtree.capture.chains import (
     walk_exception,
 )
 from failtree.capture.concurrency import write_with_retry
+from failtree.capture.code_version import detect_code_version
 from failtree.capture.redaction import compile_extra_patterns, redact_text
+from failtree.capture.snapshot import snapshot_frames
 from failtree.common.timeutil import utc_now_iso
 from failtree.core.fingerprint import FingerprintConfig, Fingerprinter
-from failtree.core.models import ItemStatus, NewError, RunStatus, RunSummary
+from failtree.core.models import ItemStatus, NewError, RunStatus, RunSummary, StackFrame
 from failtree.core.sink import ErrorSink, SqliteSink
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -34,6 +36,7 @@ class ItemHandle:
     item_id: int
     key: str
     stage: str
+    gate: Optional[str] = None  # optional OR/AND marker for root errors
 
 
 class Tracker:
@@ -80,6 +83,7 @@ class Tracker:
 
         self.continue_on_error = continue_on_error
         self._fingerprinter = Fingerprinter(fingerprint_config)
+        self._project_roots = tuple(Path(p) for p in fingerprint_config.project_roots)
         self._sink = sink
         self._sample_cap = sample_cap
         self._redact = redact
@@ -91,9 +95,19 @@ class Tracker:
         self._heartbeat_stop = threading.Event()
         self._heartbeat_thread: Optional[threading.Thread] = None
 
+        code = detect_code_version(project_roots=self._project_roots)
+        run_meta = dict(meta or {})
+        run_meta.setdefault("code_version", code.version)
+        run_meta.setdefault("code_version_source", code.source)
+
         run_id = self._safe(
             lambda: write_with_retry(
-                lambda: self._sink.start_run(label=label, meta=meta)
+                lambda: self._sink.start_run(
+                    label=label,
+                    meta=run_meta,
+                    code_version=code.version,
+                    code_version_source=code.source,
+                )
             )
         )
         self._run_id = int(run_id or 0)
@@ -141,22 +155,20 @@ class Tracker:
         self._safe(self._sink.close)
 
     def summary(self) -> RunSummary:
+        empty = RunSummary(
+            run_id=self._run_id,
+            total=0,
+            ok=0,
+            failed=0,
+            skipped=0,
+            retried=0,
+            recovered=0,
+            groups=0,
+        )
         if not self._run_id:
-            return RunSummary(
-                run_id=0, total=0, ok=0, failed=0, skipped=0, recovered=0, groups=0
-            )
+            return empty
         result = self._safe(lambda: self._sink.get_summary(self._run_id))
-        if result is None:
-            return RunSummary(
-                run_id=self._run_id,
-                total=0,
-                ok=0,
-                failed=0,
-                skipped=0,
-                recovered=0,
-                groups=0,
-            )
-        return result
+        return result if result is not None else empty
 
     def heartbeat(self) -> None:
         if self._run_id and not self._closed:
@@ -165,8 +177,18 @@ class Tracker:
             )
 
     @contextmanager
-    def item(self, key: str, *, stage: str = "") -> Iterator[ItemHandle]:
-        """Track one unit of work; capture failures automatically."""
+    def item(
+        self,
+        key: str,
+        *,
+        stage: str = "",
+        gate: Optional[str] = None,
+    ) -> Iterator[ItemHandle]:
+        """Track one unit of work; capture failures automatically.
+
+        ``gate`` is an optional OR/AND marker stored on the root error when
+        the item fails (batch semantics; ExceptionGroup defaults to OR).
+        """
         item_id = 0
         if not self._closed and self._run_id:
             ensured = self._safe(
@@ -176,12 +198,12 @@ class Tracker:
             )
             item_id = int(ensured or 0)
 
-        handle = ItemHandle(item_id=item_id, key=str(key), stage=stage)
+        handle = ItemHandle(item_id=item_id, key=str(key), stage=stage, gate=gate)
         try:
             yield handle
         except Exception as exc:
             if item_id:
-                self._persist_failure(item_id, key, stage, exc)
+                self._persist_failure(item_id, key, stage, exc, gate=gate)
             if self.continue_on_error:
                 return
             raise
@@ -224,6 +246,7 @@ class Tracker:
         *,
         key: str = "__exception__",
         stage: str = "capture",
+        gate: Optional[str] = None,
     ) -> None:
         """Record an exception outside an ``item()`` block (hooks / manual)."""
         if self._closed or not self._run_id:
@@ -235,7 +258,7 @@ class Tracker:
         )
         if not item_id:
             return
-        self._persist_failure(int(item_id), str(key), stage, exc)
+        self._persist_failure(int(item_id), str(key), stage, exc, gate=gate)
 
     def _persist_failure(
         self,
@@ -243,6 +266,8 @@ class Tracker:
         key: str,
         stage: str,
         exc: BaseException,
+        *,
+        gate: Optional[str] = None,
     ) -> None:
         self._safe(
             lambda: write_with_retry(
@@ -264,8 +289,10 @@ class Tracker:
         ts = utc_now_iso()
         results = []
         payload: list[NewError] = []
+        all_frames: list[StackFrame] = []
         for index, node in enumerate(nodes):
             frames = extract_frames(node.exc)
+            all_frames.extend(frames)
             raw_message = str(node.exc)
             raw_tb = format_exception_text(node.exc)
             if self._redact:
@@ -284,6 +311,7 @@ class Tracker:
                 parent_ref = None
             else:
                 parent_ref = -(node.parent_index + 1)
+            node_gate = _infer_gate(node.exc, node.relation, gate if index == 0 else None)
             payload.append(
                 NewError(
                     item_id=item_id,
@@ -296,6 +324,7 @@ class Tracker:
                     fingerprint=result.fingerprint,
                     ts=ts,
                     is_group_root=index in leaves,
+                    gate=node_gate,
                 )
             )
 
@@ -320,6 +349,21 @@ class Tracker:
 
             self._safe(lambda: write_with_retry(_bump))
 
+        self._snapshot_frames(all_frames)
+
+    def _snapshot_frames(self, frames: Sequence[StackFrame]) -> None:
+        if not self._run_id or not frames:
+            return
+        rows = snapshot_frames(frames, project_roots=self._project_roots)
+        for path, content_hash, content in rows:
+
+            def _snap(
+                p: str = path, h: str = content_hash, c: str = content
+            ) -> None:
+                self._sink.snapshot_run_file(self._run_id, p, h, c)
+
+            self._safe(lambda: write_with_retry(_snap))
+
     def _start_heartbeat(self, interval: float) -> None:
         def _loop() -> None:
             while not self._heartbeat_stop.wait(interval):
@@ -338,6 +382,21 @@ class Tracker:
         except Exception as exc:  # pragma: no cover - defensive
             print(f"failtree: {exc}", file=sys.stderr)
             return default
+
+
+def _infer_gate(
+    exc: BaseException,
+    relation: str,
+    explicit: Optional[str],
+) -> Optional[str]:
+    """OR for ExceptionGroup parents; honor explicit gate on the root node."""
+    _ = relation
+    if explicit in ("OR", "AND"):
+        return explicit
+    bases = {b.__name__ for b in type(exc).__mro__}
+    if "BaseExceptionGroup" in bases or "ExceptionGroup" in bases:
+        return "OR"
+    return None
 
 
 def _resolve_item_key(

@@ -16,6 +16,8 @@ One pipeline / process execution.
 | `status` | `running` \| `completed` \| `aborted` | |
 | `heartbeat_at` | ISO-8601 UTC \| null | Last alive signal |
 | `meta` | object | Opaque JSON (git sha, env, host, …) |
+| `code_version` | str \| null | `GIT_SHA` / `git rev-parse` / `unknown` (P6) |
+| `code_version_source` | `env` \| `git` \| `unknown` \| null | How version was detected |
 
 ### Item
 One unit of work (file, batch id, boot key, …).
@@ -48,6 +50,7 @@ One exception node in a causality tree.
 | `fingerprint` | str | Short hash for grouping |
 | `ts` | ISO-8601 | |
 | `is_group_root` | bool | Leaf used for group counts |
+| `gate` | `OR` \| `AND` \| null | Optional FTA-style marker (ExceptionGroup → OR) |
 
 ### Group
 Root-cause cluster keyed by fingerprint.
@@ -59,6 +62,14 @@ Root-cause cluster keyed by fingerprint.
 | `count` | int | |
 | `first_seen` / `last_seen` | ISO-8601 | |
 | `example_ids` | int[] | Capped sample of error ids |
+
+### Code blob / run file (P6)
+Deduplicated source snapshots for files that appear in tracebacks.
+
+| Entity | Field | Notes |
+|--------|-------|--------|
+| `code_blobs` | `content_hash`, `content` | SHA-256 of file bytes; shared across runs |
+| `run_files` | `run_id`, `path`, `content_hash` | Which snapshot a run saw |
 
 ## Capture → sink events
 
@@ -73,6 +84,7 @@ Capture emits logical operations; sinks persist them.
 | `finalize_item` | Set status / attempts |
 | `insert_errors` | Persist error tree nodes |
 | `bump_group` | Increment group + examples |
+| `snapshot_run_file` | Persist traceback source snapshot (hash-deduped) |
 | `close` | Release resources |
 
 ## Sink interface

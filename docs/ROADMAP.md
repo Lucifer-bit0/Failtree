@@ -34,8 +34,10 @@ Estimates assume part-time work and are rough: about **9 weeks to v1.0**, with a
 | P1 Core | Done | Schema v2 (+ heartbeat), fingerprint, storage, fixtures |
 | P2 Capture | Done (for test gate) | `init()`, `run(main)`, hooks, redaction, heartbeat, fail-open, `failtree run --` |
 | P3 Viewer | Done | Textual tree (group→item→error), detail, search, stage filter, multi-DB, live header |
-| P4 Batch | Partial | status/summary/export exist; ranking/gates optional polish |
-| P5–P7 | Not started | |
+| P4 Batch | Done | ranking % of failures, OR/AND gates, richer summary/export, schema v3 |
+| P5 Run diff | Done | `failtree diff`, new/fixed/persisting/regressed, TUI `c` / `--diff` |
+| P6 Code correlation | Done | code version, traceback snapshots, `failtree correlate`, TUI panel |
+| P7 Release | Not started | |
 
 > Note: `failtree run -- <cmd>` was built early (startup/import crashes). The roadmap below still lists it under “After v1.0” as an optional emphasis area; treat the CLI as already available.
 
@@ -138,6 +140,6 @@ Estimates assume part-time work and are rough: about **9 weeks to v1.0**, with a
 
 ## Your next three actions
 
-1. **Try the TUI:** `failtree view michigan_runs.db` (install `pip install -e ".[tui]"`).
-2. **Push P0–P3 to GitHub** for other services.
-3. **P4 polish toward v0.1 alpha** (failure-rate ranking, OR/AND markers) — then gather feedback before P5/P6.
+1. **Verify P6:** two runs with a code edit, then `failtree correlate db 1 2`.
+2. **Push P0–P6 to GitHub**.
+3. **Start P7 hardening / v1.0** (README GIF, CONTRIBUTING, PyPI).

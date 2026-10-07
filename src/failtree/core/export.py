@@ -15,10 +15,11 @@ def export_failed_keys(
     *,
     exc_type: Optional[str] = None,
     stage: Optional[str] = None,
+    fingerprint: Optional[str] = None,
 ) -> int:
     """Write failed item keys (one per line). Returns number of keys written."""
     keys: Sequence[str] = storage.iter_failed_keys(
-        run_id, exc_type=exc_type, stage=stage
+        run_id, exc_type=exc_type, stage=stage, fingerprint=fingerprint
     )
     path = Path(dest)
     path.write_text("\n".join(keys) + ("\n" if keys else ""), encoding="utf-8")

@@ -79,12 +79,15 @@ with Tracker("runs.db", label="nightly", continue_on_error=True) as t:
 ```bash
 failtree summary runs.db
 failtree export runs.db -o retry.txt --stage parse --failed-type ValueError
+failtree diff runs.db 1 2                   # new / fixed / persisting / regressed
+failtree correlate runs.db 1 2              # likely related code changes
 failtree run --db runs.db -- python broken_app.py
 failtree view michigan_runs.db              # Textual TUI (needs failtree[tui])
+failtree view runs.db --diff 1 2            # open TUI in run-diff mode
 failtree view runs.db other.db              # multi-DB switcher
 ```
 
-TUI keys: `/` search · `f` stage filter · `e` export retry.txt · `r` refresh · `d` switch DB · `q` quit
+TUI keys: `/` search · `f` stage filter · `e` export retry.txt · `c` run diff · `r` refresh · `d` switch DB · `q` quit
 
 ## Demo
 
@@ -95,9 +98,8 @@ failtree summary examples/fake_runs.db
 
 ## Status
 
-- **Phase 1:** core storage + fingerprinting  
-- **Phase 2:** Tracker capture, exception chains, CLI summary/export  
-- **Phase 3:** Textual TUI (next)
+- **P0–P6:** foundations through code-change correlation (see [docs/ROADMAP.md](docs/ROADMAP.md))
+- **Next:** P7 hardening / v1.0
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

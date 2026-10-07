@@ -19,6 +19,9 @@ class ErrorSink(Protocol):
         self,
         label: Optional[str] = None,
         meta: Optional[Dict[str, Any]] = None,
+        *,
+        code_version: Optional[str] = None,
+        code_version_source: Optional[str] = None,
     ) -> int: ...
 
     def finish_run(
@@ -51,6 +54,14 @@ class ErrorSink(Protocol):
         sample_cap: int = 5,
     ) -> None: ...
 
+    def snapshot_run_file(
+        self,
+        run_id: int,
+        path: str,
+        content_hash: str,
+        content: str,
+    ) -> None: ...
+
     def get_summary(self, run_id: int) -> RunSummary: ...
 
     def close(self) -> None: ...
@@ -67,8 +78,16 @@ class SqliteSink:
         self,
         label: Optional[str] = None,
         meta: Optional[Dict[str, Any]] = None,
+        *,
+        code_version: Optional[str] = None,
+        code_version_source: Optional[str] = None,
     ) -> int:
-        return self.storage.create_run(label=label, meta=meta)
+        return self.storage.create_run(
+            label=label,
+            meta=meta,
+            code_version=code_version,
+            code_version_source=code_version_source,
+        )
 
     def finish_run(
         self, run_id: int, status: RunStatus = RunStatus.COMPLETED
@@ -113,6 +132,15 @@ class SqliteSink:
             ts=ts,
             sample_cap=sample_cap,
         )
+
+    def snapshot_run_file(
+        self,
+        run_id: int,
+        path: str,
+        content_hash: str,
+        content: str,
+    ) -> None:
+        self.storage.snapshot_run_file(run_id, path, content_hash, content)
 
     def get_summary(self, run_id: int) -> RunSummary:
         return self.storage.get_summary(run_id)

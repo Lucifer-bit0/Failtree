@@ -1,4 +1,4 @@
-"""CLI entrypoint: summary, export, run, view."""
+"""CLI entrypoint: summary, export, diff, run, view."""
 
 from __future__ import annotations
 
@@ -8,9 +8,11 @@ from pathlib import Path
 
 from failtree._version import __version__
 from failtree.capture.bootstrap import run_command
+from failtree.core.correlate import correlate_runs, format_correlation_report
+from failtree.core.diff import compare_runs, format_diff_report
 from failtree.core.export import export_failed_keys
 from failtree.core.storage import Storage
-from failtree.core.summary import summarize_run
+from failtree.core.summary import format_summary_report, rank_groups, summarize_run
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -28,6 +30,32 @@ def main(argv: list[str] | None = None) -> int:
     p_export.add_argument("--run", type=int, default=None, help="Run id (default: latest)")
     p_export.add_argument("--failed-type", dest="failed_type", default=None)
     p_export.add_argument("--stage", default=None)
+    p_export.add_argument(
+        "--fingerprint",
+        default=None,
+        help="Only export items for this root-cause fingerprint",
+    )
+
+    p_diff = sub.add_parser(
+        "diff",
+        help="Compare two runs by fingerprint (new/fixed/persisting/regressed)",
+    )
+    p_diff.add_argument("db", type=Path, help="Path to runs.db")
+    p_diff.add_argument("before", type=int, help="Earlier run id")
+    p_diff.add_argument("after", type=int, help="Later run id")
+
+    p_corr = sub.add_parser(
+        "correlate",
+        help="Correlate source-file changes between two runs (not proof)",
+    )
+    p_corr.add_argument("db", type=Path, help="Path to runs.db")
+    p_corr.add_argument("before", type=int, help="Earlier run id")
+    p_corr.add_argument("after", type=int, help="Later run id")
+    p_corr.add_argument(
+        "--fingerprint",
+        default=None,
+        help="Limit frame matching to this fingerprint",
+    )
 
     p_run = sub.add_parser(
         "run",
@@ -54,6 +82,14 @@ def main(argv: list[str] | None = None) -> int:
         help="One or more runs.db paths (multi-DB switcher)",
     )
     p_view.add_argument("--run", type=int, default=None, help="Focus a run id")
+    p_view.add_argument(
+        "--diff",
+        nargs=2,
+        type=int,
+        metavar=("BEFORE", "AFTER"),
+        default=None,
+        help="Open in run-diff mode (compare two run ids)",
+    )
 
     args = parser.parse_args(argv)
     if not args.command:
@@ -61,7 +97,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "view":
-        return _cmd_view(args.db, args.run)
+        before = after = None
+        if args.diff is not None:
+            before, after = args.diff
+        return _cmd_view(args.db, args.run, diff_before=before, diff_after=after)
     if args.command == "summary":
         return _cmd_summary(args.db, args.run)
     if args.command == "export":
@@ -71,13 +110,26 @@ def main(argv: list[str] | None = None) -> int:
             run_id=args.run,
             exc_type=args.failed_type,
             stage=args.stage,
+            fingerprint=args.fingerprint,
+        )
+    if args.command == "diff":
+        return _cmd_diff(args.db, args.before, args.after)
+    if args.command == "correlate":
+        return _cmd_correlate(
+            args.db, args.before, args.after, fingerprint=args.fingerprint
         )
     if args.command == "run":
         return _cmd_run(args.db, args.label, args.cmd)
     return 2
 
 
-def _cmd_view(dbs: list[Path], run_id: int | None) -> int:
+def _cmd_view(
+    dbs: list[Path],
+    run_id: int | None,
+    *,
+    diff_before: int | None = None,
+    diff_after: int | None = None,
+) -> int:
     paths = list(dbs) if dbs else [Path("runs.db")]
     missing = [p for p in paths if not p.exists()]
     if missing:
@@ -93,7 +145,12 @@ def _cmd_view(dbs: list[Path], run_id: int | None) -> int:
             file=sys.stderr,
         )
         return 2
-    run_viewer(paths, run_id=run_id)
+    run_viewer(
+        paths,
+        run_id=run_id,
+        diff_before=diff_before,
+        diff_after=diff_after,
+    )
     return 0
 
 
@@ -127,19 +184,8 @@ def _cmd_summary(db: Path, run_id: int | None) -> int:
     with Storage(db) as storage:
         rid = _resolve_run_id(storage, run_id)
         summary = summarize_run(storage, rid)
-        groups = storage.list_groups(limit=10)
-        print(f"run_id:   {summary.run_id}")
-        print(f"total:    {summary.total}")
-        print(f"ok:       {summary.ok}")
-        print(f"failed:   {summary.failed}")
-        print(f"skipped:  {summary.skipped}")
-        print(f"recovered:{summary.recovered}")
-        print(f"groups:   {summary.groups}")
-        if groups:
-            print()
-            print("top groups:")
-            for g in groups:
-                print(f"  {g.count:5d}  {g.title}  ({g.fingerprint})")
+        impacts = rank_groups(storage, rid, limit=10)
+        print(format_summary_report(summary, impacts))
     return 0
 
 
@@ -150,6 +196,7 @@ def _cmd_export(
     run_id: int | None,
     exc_type: str | None,
     stage: str | None,
+    fingerprint: str | None = None,
 ) -> int:
     with Storage(db) as storage:
         rid = _resolve_run_id(storage, run_id)
@@ -159,8 +206,45 @@ def _cmd_export(
             output,
             exc_type=exc_type,
             stage=stage,
+            fingerprint=fingerprint,
         )
     print(f"Wrote {n} keys to {output}")
+    return 0
+
+
+def _cmd_diff(db: Path, before: int, after: int) -> int:
+    if not db.exists():
+        print(f"Database not found: {db}", file=sys.stderr)
+        return 2
+    with Storage(db) as storage:
+        try:
+            diff = compare_runs(storage, before, after)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(format_diff_report(diff))
+    return 0
+
+
+def _cmd_correlate(
+    db: Path,
+    before: int,
+    after: int,
+    *,
+    fingerprint: str | None = None,
+) -> int:
+    if not db.exists():
+        print(f"Database not found: {db}", file=sys.stderr)
+        return 2
+    with Storage(db) as storage:
+        try:
+            report = correlate_runs(
+                storage, before, after, fingerprint=fingerprint
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(format_correlation_report(report))
     return 0
 
 

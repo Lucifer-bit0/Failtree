@@ -12,11 +12,14 @@ from failtree.common.jsonutil import dumps_json, loads_json
 from failtree.common.timeutil import parse_iso, utc_now_iso
 from failtree.core.models import (
     ErrorRecord,
+    Gate,
     Group,
+    GroupImpact,
     Item,
     ItemStatus,
     NewError,
     Run,
+    RunFile,
     RunStatus,
     RunSummary,
 )
@@ -108,16 +111,34 @@ class Storage:
         self,
         label: Optional[str] = None,
         meta: Optional[Dict[str, Any]] = None,
+        *,
+        code_version: Optional[str] = None,
+        code_version_source: Optional[str] = None,
     ) -> int:
         started = utc_now_iso()
-        meta_json = dumps_json(meta or {})
+        meta_data = dict(meta or {})
+        if code_version and "code_version" not in meta_data:
+            meta_data["code_version"] = code_version
+            meta_data["code_version_source"] = code_version_source
+        meta_json = dumps_json(meta_data)
         with self._transaction() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO runs(label, started_at, status, meta_json, heartbeat_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO runs(
+                    label, started_at, status, meta_json, heartbeat_at,
+                    code_version, code_version_source
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (label, started, RunStatus.RUNNING.value, meta_json, started),
+                (
+                    label,
+                    started,
+                    RunStatus.RUNNING.value,
+                    meta_json,
+                    started,
+                    code_version,
+                    code_version_source,
+                ),
             )
             return int(cur.lastrowid)
 
@@ -253,9 +274,10 @@ class Storage:
                     """
                     INSERT INTO errors(
                         item_id, parent_error_id, depth, exc_type, message,
-                        normalized_message, traceback, fingerprint, ts, is_group_root
+                        normalized_message, traceback, fingerprint, ts,
+                        is_group_root, gate
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         err.item_id,
@@ -268,6 +290,7 @@ class Storage:
                         err.fingerprint,
                         err.ts,
                         1 if err.is_group_root else 0,
+                        err.gate,
                     ),
                 )
                 new_id = int(cur.lastrowid)
@@ -466,13 +489,185 @@ class Storage:
         return RunSummary(
             run_id=run_id,
             total=total,
-            ok=counts.get(ItemStatus.OK.value, 0)
-            + counts.get(ItemStatus.RETRIED.value, 0),
+            ok=counts.get(ItemStatus.OK.value, 0),
             failed=counts.get(ItemStatus.FAILED.value, 0),
             skipped=counts.get(ItemStatus.SKIPPED.value, 0),
+            retried=counts.get(ItemStatus.RETRIED.value, 0),
             recovered=recovered,
             groups=int(groups_row["n"] if groups_row else 0),
         )
+
+    def rank_groups(
+        self,
+        run_id: int,
+        *,
+        limit: int = 20,
+    ) -> List[GroupImpact]:
+        """Rank root-cause groups by share of failed items in a run."""
+        failed_row = self._conn.execute(
+            """
+            SELECT COUNT(*) AS n FROM items
+            WHERE run_id = ? AND status = ?
+            """,
+            (run_id, ItemStatus.FAILED.value),
+        ).fetchone()
+        failed_total = int(failed_row["n"] if failed_row else 0)
+        if failed_total == 0:
+            return []
+
+        rows = self._conn.execute(
+            """
+            SELECT e.fingerprint AS fingerprint,
+                   g.title AS title,
+                   g.count AS global_count,
+                   COUNT(DISTINCT i.id) AS failed_items
+            FROM errors e
+            JOIN items i ON i.id = e.item_id
+            LEFT JOIN groups g ON g.fingerprint = e.fingerprint
+            WHERE i.run_id = ?
+              AND i.status = ?
+              AND e.is_group_root = 1
+            GROUP BY e.fingerprint
+            ORDER BY failed_items DESC, e.fingerprint
+            LIMIT ?
+            """,
+            (run_id, ItemStatus.FAILED.value, limit),
+        ).fetchall()
+
+        impacts: List[GroupImpact] = []
+        for row in rows:
+            failed_items = int(row["failed_items"])
+            title = row["title"] or row["fingerprint"]
+            impacts.append(
+                GroupImpact(
+                    fingerprint=row["fingerprint"],
+                    title=title,
+                    count=int(row["global_count"] or failed_items),
+                    failed_items=failed_items,
+                    pct_of_failures=round(100.0 * failed_items / failed_total, 1),
+                )
+            )
+        return impacts
+
+    def fingerprint_counts_for_run(self, run_id: int) -> Dict[str, Dict[str, Any]]:
+        """Map fingerprint → {count, title} for failed group-root errors in a run.
+
+        ``count`` is the number of distinct failed items with that fingerprint.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT e.fingerprint AS fingerprint,
+                   g.title AS title,
+                   COUNT(DISTINCT i.id) AS failed_items
+            FROM errors e
+            JOIN items i ON i.id = e.item_id
+            LEFT JOIN groups g ON g.fingerprint = e.fingerprint
+            WHERE i.run_id = ?
+              AND i.status = ?
+              AND e.is_group_root = 1
+            GROUP BY e.fingerprint
+            """,
+            (run_id, ItemStatus.FAILED.value),
+        ).fetchall()
+        return {
+            str(row["fingerprint"]): {
+                "count": int(row["failed_items"]),
+                "title": str(row["title"] or row["fingerprint"]),
+            }
+            for row in rows
+        }
+
+    def snapshot_run_file(
+        self,
+        run_id: int,
+        path: str,
+        content_hash: str,
+        content: str,
+    ) -> None:
+        """Store a deduplicated source snapshot for a run."""
+        with self._transaction() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO code_blobs(content_hash, content)
+                VALUES (?, ?)
+                """,
+                (content_hash, content),
+            )
+            conn.execute(
+                """
+                INSERT INTO run_files(run_id, path, content_hash)
+                VALUES (?, ?, ?)
+                ON CONFLICT(run_id, path) DO UPDATE SET
+                    content_hash = excluded.content_hash
+                """,
+                (run_id, path, content_hash),
+            )
+
+    def list_run_files(self, run_id: int) -> List[RunFile]:
+        rows = self._conn.execute(
+            """
+            SELECT run_id, path, content_hash
+            FROM run_files
+            WHERE run_id = ?
+            ORDER BY path
+            """,
+            (run_id,),
+        ).fetchall()
+        return [
+            RunFile(
+                run_id=int(r["run_id"]),
+                path=str(r["path"]),
+                content_hash=str(r["content_hash"]),
+            )
+            for r in rows
+        ]
+
+    def get_code_blob(self, content_hash: Optional[str]) -> Optional[str]:
+        if not content_hash:
+            return None
+        row = self._conn.execute(
+            "SELECT content FROM code_blobs WHERE content_hash = ?",
+            (content_hash,),
+        ).fetchone()
+        return str(row["content"]) if row else None
+
+    def list_frame_hints_for_run(
+        self,
+        run_id: int,
+        *,
+        fingerprint: Optional[str] = None,
+    ) -> List[tuple[str, str, bool]]:
+        """Parse traceback frames from errors: (path, func, is_group_root)."""
+        import re
+
+        sql = """
+            SELECT e.traceback AS traceback, e.is_group_root AS is_group_root
+            FROM errors e
+            JOIN items i ON i.id = e.item_id
+            WHERE i.run_id = ?
+        """
+        params: List[Any] = [run_id]
+        if fingerprint is not None:
+            sql += " AND e.fingerprint = ?"
+            params.append(fingerprint)
+        rows = self._conn.execute(sql, params).fetchall()
+        frame_re = re.compile(
+            r'File "([^"]+)", line \d+, in (\S+)'
+        )
+        out: List[tuple[str, str, bool]] = []
+        seen: set[tuple[str, str, bool]] = set()
+        for row in rows:
+            tb = row["traceback"] or ""
+            is_root = bool(row["is_group_root"])
+            for match in frame_re.finditer(tb):
+                key = (match.group(1), match.group(2), is_root)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(key)
+        # Prefer root-cause hints first for callers that iterate in order.
+        out.sort(key=lambda t: (0 if t[2] else 1, t[0], t[1]))
+        return out
 
     def iter_failed_keys(
         self,
@@ -480,6 +675,7 @@ class Storage:
         *,
         exc_type: Optional[str] = None,
         stage: Optional[str] = None,
+        fingerprint: Optional[str] = None,
     ) -> List[str]:
         sql = """
             SELECT DISTINCT i.key
@@ -494,6 +690,9 @@ class Storage:
         if exc_type is not None:
             sql += " AND e.exc_type = ?"
             params.append(exc_type)
+        if fingerprint is not None:
+            sql += " AND e.fingerprint = ?"
+            params.append(fingerprint)
         sql += " ORDER BY i.key"
         rows = self._conn.execute(sql, params).fetchall()
         return [str(r["key"]) for r in rows]
@@ -502,6 +701,13 @@ class Storage:
 
     @staticmethod
     def _row_to_run(row: sqlite3.Row) -> Run:
+        code_version = None
+        code_version_source = None
+        try:
+            code_version = row["code_version"]
+            code_version_source = row["code_version_source"]
+        except (IndexError, KeyError):
+            pass
         return Run(
             id=int(row["id"]),
             label=row["label"],
@@ -509,6 +715,8 @@ class Storage:
             ended_at=parse_iso(row["ended_at"]) if row["ended_at"] else None,
             status=RunStatus(row["status"]),
             meta=loads_json(row["meta_json"], default={}) or {},
+            code_version=code_version,
+            code_version_source=code_version_source,
         )
 
     @staticmethod
@@ -524,6 +732,12 @@ class Storage:
 
     @staticmethod
     def _row_to_error(row: sqlite3.Row) -> ErrorRecord:
+        gate_raw = None
+        try:
+            gate_raw = row["gate"]
+        except (IndexError, KeyError):
+            gate_raw = None
+        gate = Gate(gate_raw) if gate_raw in (Gate.OR.value, Gate.AND.value) else None
         return ErrorRecord(
             id=int(row["id"]),
             item_id=int(row["item_id"]),
@@ -538,6 +752,7 @@ class Storage:
             fingerprint=row["fingerprint"],
             ts=parse_iso(row["ts"]),
             is_group_root=bool(row["is_group_root"]),
+            gate=gate,
         )
 
     @staticmethod
