@@ -33,7 +33,7 @@ Estimates assume part-time work and are rough: about **9 weeks to v1.0**, with a
 | P0 Foundations | Done | Name, MIT, `pyproject`, CI, `docs/EVENT_SCHEMA.md`, `ErrorSink` / `SqliteSink` |
 | P1 Core | Done | Schema v2 (+ heartbeat), fingerprint, storage, fixtures |
 | P2 Capture | Done (for test gate) | `init()`, `run(main)`, hooks, redaction, heartbeat, fail-open, `failtree run --` |
-| P3 Viewer | Not started | CLI `summary` / `export` exist; Textual TUI not built |
+| P3 Viewer | Done | Textual tree (group→item→error), detail, search, stage filter, multi-DB, live header |
 | P4 Batch | Partial | status/summary/export exist; ranking/gates optional polish |
 | P5–P7 | Not started | |
 
@@ -138,6 +138,6 @@ Estimates assume part-time work and are rough: about **9 weeks to v1.0**, with a
 
 ## Your next three actions
 
-1. **Test P0+P2 on real services** (`init` / `run(main)` / michigan inject / `failtree run --`).
-2. **Push to GitHub** so other services can `pip install git+https://...`.
-3. **Only then start P3** (Textual TUI) — do not begin P5–P7 until alpha feedback.
+1. **Try the TUI:** `failtree view michigan_runs.db` (install `pip install -e ".[tui]"`).
+2. **Push P0–P3 to GitHub** for other services.
+3. **P4 polish toward v0.1 alpha** (failure-rate ranking, OR/AND markers) — then gather feedback before P5/P6.

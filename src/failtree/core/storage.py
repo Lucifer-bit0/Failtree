@@ -360,16 +360,82 @@ class Storage:
         ).fetchone()
         return self._dict_to_group(dict(row)) if row else None
 
-    def list_groups(self, *, limit: int = 100, offset: int = 0) -> List[Group]:
+    def list_groups(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        query: Optional[str] = None,
+    ) -> List[Group]:
+        if query:
+            like = f"%{query}%"
+            rows = self._conn.execute(
+                """
+                SELECT * FROM groups
+                WHERE title LIKE ? OR fingerprint LIKE ?
+                ORDER BY count DESC, last_seen DESC
+                LIMIT ? OFFSET ?
+                """,
+                (like, like, limit, offset),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM groups
+                ORDER BY count DESC, last_seen DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ).fetchall()
+        return [self._dict_to_group(dict(r)) for r in rows]
+
+    def list_items_for_group(
+        self,
+        fingerprint: str,
+        *,
+        run_id: Optional[int] = None,
+        stage: Optional[str] = None,
+        limit: int = 200,
+    ) -> List[Item]:
+        sql = """
+            SELECT DISTINCT i.*
+            FROM items i
+            JOIN errors e ON e.item_id = i.id
+            WHERE e.fingerprint = ? AND e.is_group_root = 1
+        """
+        params: List[Any] = [fingerprint]
+        if run_id is not None:
+            sql += " AND i.run_id = ?"
+            params.append(run_id)
+        if stage is not None:
+            sql += " AND i.stage = ?"
+            params.append(stage)
+        sql += " ORDER BY i.id DESC LIMIT ?"
+        params.append(limit)
+        rows = self._conn.execute(sql, params).fetchall()
+        return [self._row_to_item(r) for r in rows]
+
+    def list_root_errors_for_item(self, item_id: int) -> List[ErrorRecord]:
         rows = self._conn.execute(
             """
-            SELECT * FROM groups
-            ORDER BY count DESC, last_seen DESC
-            LIMIT ? OFFSET ?
+            SELECT * FROM errors
+            WHERE item_id = ? AND parent_error_id IS NULL
+            ORDER BY id
             """,
-            (limit, offset),
+            (item_id,),
         ).fetchall()
-        return [self._dict_to_group(dict(r)) for r in rows]
+        return [self._row_to_error(r) for r in rows]
+
+    def list_runs(self, *, limit: int = 50) -> List[Run]:
+        rows = self._conn.execute(
+            """
+            SELECT * FROM runs
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [self._row_to_run(r) for r in rows]
 
     # --- summary / export queries -------------------------------------------
 

@@ -80,7 +80,11 @@ with Tracker("runs.db", label="nightly", continue_on_error=True) as t:
 failtree summary runs.db
 failtree export runs.db -o retry.txt --stage parse --failed-type ValueError
 failtree run --db runs.db -- python broken_app.py
+failtree view michigan_runs.db              # Textual TUI (needs failtree[tui])
+failtree view runs.db other.db              # multi-DB switcher
 ```
+
+TUI keys: `/` search · `f` stage filter · `e` export retry.txt · `r` refresh · `d` switch DB · `q` quit
 
 ## Demo
 

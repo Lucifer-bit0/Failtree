@@ -1,4 +1,4 @@
-"""CLI entrypoint: summary, export, run, (view in Phase 3)."""
+"""CLI entrypoint: summary, export, run, view."""
 
 from __future__ import annotations
 
@@ -46,8 +46,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Command after -- , e.g. failtree run --db x.db -- python app.py",
     )
 
-    p_view = sub.add_parser("view", help="Open the Textual TUI (Phase 3)")
-    p_view.add_argument("db", type=Path, nargs="?", default=None)
+    p_view = sub.add_parser("view", help="Open the Textual TUI")
+    p_view.add_argument(
+        "db",
+        type=Path,
+        nargs="*",
+        help="One or more runs.db paths (multi-DB switcher)",
+    )
+    p_view.add_argument("--run", type=int, default=None, help="Focus a run id")
 
     args = parser.parse_args(argv)
     if not args.command:
@@ -55,12 +61,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "view":
-        print(
-            "TUI is not implemented yet. Install/use Phase 3, or run: failtree summary <db>",
-            file=sys.stderr,
-        )
-        return 2
-
+        return _cmd_view(args.db, args.run)
     if args.command == "summary":
         return _cmd_summary(args.db, args.run)
     if args.command == "export":
@@ -76,8 +77,27 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
+def _cmd_view(dbs: list[Path], run_id: int | None) -> int:
+    paths = list(dbs) if dbs else [Path("runs.db")]
+    missing = [p for p in paths if not p.exists()]
+    if missing:
+        print(f"Database not found: {missing[0]}", file=sys.stderr)
+        return 2
+    try:
+        from failtree.viewer.app import run_viewer
+    except ImportError:
+        print(
+            "Textual is required for the TUI. Install with:\n"
+            '  pip install "failtree[tui]"\n'
+            "Or use: failtree summary <db>",
+            file=sys.stderr,
+        )
+        return 2
+    run_viewer(paths, run_id=run_id)
+    return 0
+
+
 def _cmd_run(db: Path, label: str | None, cmd: list[str]) -> int:
-    # argparse REMAINDER may keep a leading "--"
     command = list(cmd)
     if command and command[0] == "--":
         command = command[1:]
