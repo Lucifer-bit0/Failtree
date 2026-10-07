@@ -43,9 +43,11 @@ def main() -> None:
         print(f"  groups={summary.groups} recovered={summary.recovered}")
         print(f"DB: {DB}")
         print()
-        print("Try:")
+        print("Next (5-minute path):")
         print(f"  failtree summary {DB}")
         print(f"  failtree export {DB} -o retry.txt --stage parse")
+        print(f"  failtree view {DB}")
+        print("  python examples/correlate_demo.py")
 
 
 if __name__ == "__main__":

@@ -37,7 +37,7 @@ Estimates assume part-time work and are rough: about **9 weeks to v1.0**, with a
 | P4 Batch | Done | ranking % of failures, OR/AND gates, richer summary/export, schema v3 |
 | P5 Run diff | Done | `failtree diff`, new/fixed/persisting/regressed, TUI `c` / `--diff` |
 | P6 Code correlation | Done | code version, traceback snapshots, `failtree correlate`, TUI panel |
-| P7 Release | Not started | |
+| P7 Release | Done | v1.0.0 docs, CI matrix+ruff, PyPI publish workflow, CONTRIBUTING |
 
 > Note: `failtree run -- <cmd>` was built early (startup/import crashes). The roadmap below still lists it under “After v1.0” as an optional emphasis area; treat the CLI as already available.
 
@@ -140,6 +140,6 @@ Estimates assume part-time work and are rough: about **9 weeks to v1.0**, with a
 
 ## Your next three actions
 
-1. **Verify P6:** two runs with a code edit, then `failtree correlate db 1 2`.
-2. **Push P0–P6 to GitHub**.
-3. **Start P7 hardening / v1.0** (README GIF, CONTRIBUTING, PyPI).
+1. **Push v1.0.0** to GitHub and create a GitHub Release tag `v1.0.0`.
+2. **Configure PyPI Trusted Publishing** for `.github/workflows/publish.yml`, then publish.
+3. **Announce** using the draft in [docs/ANNOUNCE.md](ANNOUNCE.md).

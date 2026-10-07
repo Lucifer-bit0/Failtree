@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="420" viewBox="0 0 920 420" role="img" aria-label="failtree CLI demo">
+  <rect width="920" height="420" rx="12" fill="#1e1e1e"/>
+  <text x="24" y="36" fill="#6a9955" font-family="Consolas, monospace" font-size="16">$ python examples/fake_pipeline.py</text>
+  <text x="24" y="64" fill="#d4d4d4" font-family="Consolas, monospace" font-size="15">Run summary  total=12 ok=9 failed=3  groups=2</text>
+  <text x="24" y="100" fill="#6a9955" font-family="Consolas, monospace" font-size="16">$ failtree summary examples/fake_runs.db</text>
+  <text x="24" y="128" fill="#d4d4d4" font-family="Consolas, monospace" font-size="15">run_id: 1   ok: 9   failed: 3   groups: 2</text>
+  <text x="24" y="152" fill="#d4d4d4" font-family="Consolas, monospace" font-size="15">failure-rate ranking (% of failed items):</text>
+  <text x="24" y="176" fill="#ce9178" font-family="Consolas, monospace" font-size="15">  66.7%  (2 items)  ValueError: bad id &lt;UUID&gt; in &lt;PATH&gt;</text>
+  <text x="24" y="200" fill="#ce9178" font-family="Consolas, monospace" font-size="15">  33.3%  (1 items)  RuntimeError: cannot enrich &</text>
+  <text x="24" y="236" fill="#6a9955" font-family="Consolas, monospace" font-size="16">$ failtree export examples/fake_runs.db -o retry.txt --stage parse</text>
+  <text x="24" y="264" fill="#d4d4d4" font-family="Consolas, monospace" font-size="15">Wrote 3 keys to retry.txt</text>
+  <text x="24" y="300" fill="#6a9955" font-family="Consolas, monospace" font-size="16">$ failtree view examples/fake_runs.db</text>
+  <text x="24" y="328" fill="#569cd6" font-family="Consolas, monospace" font-size="15">[TUI] Groups ’ items ’ error tree   / search   f stage   c diff   q quit</text>
+  <text x="24" y="372" fill="#808080" font-family="Consolas, monospace" font-size="14">Local SQLite · no server · pip install failtree</text>
+  <rect x="0" y="0" width="920" height="420" rx="12" fill="none" stroke="#333" stroke-width="2"/>
+</svg>

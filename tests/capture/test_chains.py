@@ -45,7 +45,7 @@ def test_cycle_guard() -> None:
 
 def test_exception_group_children() -> None:
     if sys.version_info >= (3, 11):
-        group_cls = BaseExceptionGroup  # type: ignore[name-defined]
+        group_cls = BaseExceptionGroup  # noqa: F821
     else:
         from exceptiongroup import BaseExceptionGroup as group_cls
 

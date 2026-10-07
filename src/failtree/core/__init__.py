@@ -1,6 +1,6 @@
 """Domain layer: models, persistence, fingerprinting, grouping."""
 
-from failtree.core.fingerprint import FingerprintConfig, FingerprintResult, Fingerprinter
+from failtree.core.fingerprint import FingerprintConfig, Fingerprinter, FingerprintResult
 from failtree.core.grouping import GroupService
 from failtree.core.models import ErrorRecord, Group, Item, ItemStatus, Run, RunStatus, RunSummary
 from failtree.core.sink import SqliteSink

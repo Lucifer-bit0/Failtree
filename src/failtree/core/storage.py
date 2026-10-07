@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 from failtree.common.jsonutil import dumps_json, loads_json
 from failtree.common.timeutil import parse_iso, utc_now_iso
+from failtree.core.grouping import append_example_id
 from failtree.core.models import (
     ErrorRecord,
     Gate,
@@ -23,7 +24,6 @@ from failtree.core.models import (
     RunStatus,
     RunSummary,
 )
-from failtree.core.grouping import append_example_id
 from failtree.core.schema import DDL, MIGRATIONS, PRAGMAS, SCHEMA_VERSION
 
 

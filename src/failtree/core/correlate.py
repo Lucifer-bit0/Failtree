@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from failtree.core.models import (
-    CorrelateRank,
     CorrelatedChange,
+    CorrelateRank,
     CorrelationReport,
 )
 from failtree.core.storage import Storage

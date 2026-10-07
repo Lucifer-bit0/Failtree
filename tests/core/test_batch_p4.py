@@ -5,8 +5,8 @@ from pathlib import Path
 
 from failtree import Tracker
 from failtree.core.models import Gate
-from failtree.core.summary import format_summary_report, rank_groups, summarize_run
 from failtree.core.storage import Storage
+from failtree.core.summary import format_summary_report, rank_groups, summarize_run
 
 
 def test_failure_rate_ranking(tmp_path: Path) -> None:
@@ -42,7 +42,7 @@ def test_exception_group_gets_or_gate(tmp_path: Path) -> None:
     if sys.version_info < (3, 11):
         from exceptiongroup import ExceptionGroup as EG
     else:
-        EG = ExceptionGroup
+        EG = ExceptionGroup  # noqa: F821
 
     db = tmp_path / "runs.db"
     with Tracker(db, continue_on_error=True) as t:

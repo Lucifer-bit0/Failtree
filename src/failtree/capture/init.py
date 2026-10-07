@@ -26,6 +26,7 @@ def init(
     install_process_hooks: bool = True,
     heartbeat_interval: float = 30.0,
     redact: bool = True,
+    extra_redact_patterns: Sequence[tuple[str, str]] = (),
 ) -> Tracker:
     """Initialize a process-wide Tracker (call once near process start).
 
@@ -52,6 +53,7 @@ def init(
         fingerprint_config=fingerprint_config,
         meta=meta,
         redact=redact,
+        extra_redact_patterns=extra_redact_patterns,
         heartbeat_interval=heartbeat_interval,
     )
     _global_tracker = tracker

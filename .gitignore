@@ -14,3 +14,7 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+retry.txt
+michigan_files/
+examples/_correlate_worker.py
+*.egg-info/

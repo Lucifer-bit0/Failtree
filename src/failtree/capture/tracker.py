@@ -17,8 +17,8 @@ from failtree.capture.chains import (
     leaf_indices,
     walk_exception,
 )
-from failtree.capture.concurrency import write_with_retry
 from failtree.capture.code_version import detect_code_version
+from failtree.capture.concurrency import write_with_retry
 from failtree.capture.redaction import compile_extra_patterns, redact_text
 from failtree.capture.snapshot import snapshot_frames
 from failtree.common.timeutil import utc_now_iso
