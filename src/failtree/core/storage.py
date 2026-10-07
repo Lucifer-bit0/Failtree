@@ -21,7 +21,7 @@ from failtree.core.models import (
     RunSummary,
 )
 from failtree.core.grouping import append_example_id
-from failtree.core.schema import DDL, PRAGMAS, SCHEMA_VERSION
+from failtree.core.schema import DDL, MIGRATIONS, PRAGMAS, SCHEMA_VERSION
 
 
 class Storage:
@@ -68,10 +68,26 @@ class Storage:
                     "INSERT INTO schema_version(version) VALUES (?)",
                     (SCHEMA_VERSION,),
                 )
-            elif int(row["version"]) != SCHEMA_VERSION:
+                return
+
+            current = int(row["version"])
+            if current == SCHEMA_VERSION:
+                return
+            if current > SCHEMA_VERSION:
                 raise RuntimeError(
-                    f"Unsupported schema version {row['version']}; "
-                    f"expected {SCHEMA_VERSION}"
+                    f"Database schema version {current} is newer than "
+                    f"supported {SCHEMA_VERSION}"
+                )
+            for version in range(current + 1, SCHEMA_VERSION + 1):
+                for stmt in MIGRATIONS.get(version, ()):
+                    try:
+                        self._conn.execute(stmt)
+                    except sqlite3.OperationalError as exc:
+                        # Column may already exist on partially migrated DBs.
+                        if "duplicate column" not in str(exc).lower():
+                            raise
+                self._conn.execute(
+                    "UPDATE schema_version SET version = ?", (version,)
                 )
 
     @contextmanager
@@ -98,10 +114,10 @@ class Storage:
         with self._transaction() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO runs(label, started_at, status, meta_json)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO runs(label, started_at, status, meta_json, heartbeat_at)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (label, started, RunStatus.RUNNING.value, meta_json),
+                (label, started, RunStatus.RUNNING.value, meta_json, started),
             )
             return int(cur.lastrowid)
 
@@ -110,10 +126,18 @@ class Storage:
             conn.execute(
                 """
                 UPDATE runs
-                SET ended_at = ?, status = ?
+                SET ended_at = ?, status = ?, heartbeat_at = ?
                 WHERE id = ?
                 """,
-                (utc_now_iso(), status.value, run_id),
+                (utc_now_iso(), status.value, utc_now_iso(), run_id),
+            )
+
+    def heartbeat(self, run_id: int) -> None:
+        """Touch last-seen timestamp so viewers can detect stalled runs."""
+        with self._transaction() as conn:
+            conn.execute(
+                "UPDATE runs SET heartbeat_at = ? WHERE id = ?",
+                (utc_now_iso(), run_id),
             )
 
     def get_run(self, run_id: int) -> Optional[Run]:

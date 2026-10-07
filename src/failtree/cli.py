@@ -1,4 +1,4 @@
-"""CLI entrypoint: summary, export, (view in Phase 3)."""
+"""CLI entrypoint: summary, export, run, (view in Phase 3)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from failtree._version import __version__
+from failtree.capture.bootstrap import run_command
 from failtree.core.export import export_failed_keys
 from failtree.core.storage import Storage
 from failtree.core.summary import summarize_run
@@ -27,6 +28,23 @@ def main(argv: list[str] | None = None) -> int:
     p_export.add_argument("--run", type=int, default=None, help="Run id (default: latest)")
     p_export.add_argument("--failed-type", dest="failed_type", default=None)
     p_export.add_argument("--stage", default=None)
+
+    p_run = sub.add_parser(
+        "run",
+        help="Run a command and record startup/process failures into a DB",
+    )
+    p_run.add_argument(
+        "--db",
+        type=Path,
+        default=Path("runs.db"),
+        help="SQLite DB path (default: runs.db)",
+    )
+    p_run.add_argument("--label", default=None, help="Run label")
+    p_run.add_argument(
+        "cmd",
+        nargs=argparse.REMAINDER,
+        help="Command after -- , e.g. failtree run --db x.db -- python app.py",
+    )
 
     p_view = sub.add_parser("view", help="Open the Textual TUI (Phase 3)")
     p_view.add_argument("db", type=Path, nargs="?", default=None)
@@ -53,7 +71,27 @@ def main(argv: list[str] | None = None) -> int:
             exc_type=args.failed_type,
             stage=args.stage,
         )
+    if args.command == "run":
+        return _cmd_run(args.db, args.label, args.cmd)
     return 2
+
+
+def _cmd_run(db: Path, label: str | None, cmd: list[str]) -> int:
+    # argparse REMAINDER may keep a leading "--"
+    command = list(cmd)
+    if command and command[0] == "--":
+        command = command[1:]
+    if not command:
+        print(
+            "Usage: failtree run [--db runs.db] [--label name] -- <command> [args...]",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        return run_command(command, db_path=db, label=label)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
 
 def _resolve_run_id(storage: Storage, run_id: int | None) -> int:

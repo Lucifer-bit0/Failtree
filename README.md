@@ -10,26 +10,68 @@ pip install "git+https://github.com/Lucifer-bit0/Failtree.git"
 pip install -e ".[dev]"
 ```
 
-## Quick start
+## Quick start — wrap your service `main`
+
+**Option A — `init()` then use the tracker anywhere:**
 
 ```python
-from failtree import Tracker
+import failtree
 
-t = Tracker("runs.db", label="nightly", continue_on_error=True)
-with t:
+failtree.init("runs.db", label="my-service")  # hooks + heartbeat on
+
+def main() -> None:
+    t = failtree.get_tracker()
     for path in files:
         with t.item(path, stage="parse"):
             process(path)
 
-print(t.summary())
+if __name__ == "__main__":
+    try:
+        main()
+    finally:
+        failtree.shutdown()
 ```
 
-Decorator form:
+**Option B — pass `main` into `run()` (Tracker starts first):**
 
 ```python
-@t.track(stage="parse")
-def process(path: str) -> None:
-    ...
+from failtree import run, get_tracker
+
+def main() -> None:
+    t = get_tracker()
+    for path in files:
+        with t.item(path, stage="parse"):
+            process(path)
+
+if __name__ == "__main__":
+    run(main, db_path="runs.db", label="my-service")
+```
+
+That catches failures inside `main` and imports that happen *from* `main`.
+
+### Catch import/syntax failures of the whole script (Docker / server)
+
+Start failtree **outside** the app process:
+
+```bash
+failtree run --db /data/runs.db --label my-service -- python -m my_service
+```
+
+Dockerfile sketch:
+
+```dockerfile
+ENTRYPOINT ["failtree", "run", "--db", "/data/runs.db", "--label", "my-service", "--"]
+CMD ["python", "-m", "my_service"]
+```
+
+### Lower-level Tracker API
+
+```python
+from failtree import Tracker
+
+with Tracker("runs.db", label="nightly", continue_on_error=True) as t:
+    with t.item("file.csv", stage="parse"):
+        process("file.csv")
 ```
 
 ## CLI
@@ -37,6 +79,7 @@ def process(path: str) -> None:
 ```bash
 failtree summary runs.db
 failtree export runs.db -o retry.txt --stage parse --failed-type ValueError
+failtree run --db runs.db -- python broken_app.py
 ```
 
 ## Demo

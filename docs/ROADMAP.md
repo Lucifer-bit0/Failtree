@@ -1,179 +1,143 @@
-# failtree — Roadmap & recommended path
+# Failtree Roadmap
 
-This is the execution path. Prefer shipping vertical slices that a data engineer can use, over polishing UI early.
+## The idea in one line
 
----
+**A terminal-first, library-first error tracker for batch pipelines**: capture failures, group them by root cause, explore them as a parent/child tree, and see what changed between runs and in the code.
 
-## Guiding principles
+## Major decisions (locked in)
 
-1. **Core first** — without schema + fingerprint, nothing else matters.  
-2. **CLI before TUI** — summary/export unblock value if Textual slips.  
-3. **Fixtures over opinions** — grouping quality is proven by golden tests.  
-4. **Resist mini-Sentry** — no web, alerts, or ingest server until users demand them.  
-5. **Park FTA ideas** — gates / faultree export after observational rankings exist.
+| Decision | Choice |
+|---|---|
+| **Form** | Python library you import per project. No server needed for v1 |
+| **Storage** | Local SQLite (WAL), one file per project |
+| **UI** | Textual TUI. Works over SSH and `docker exec -it` |
+| **Future-proofing** | A **sink interface** between capture and storage, so an HTTP server can be added later without a rewrite |
+| **Suggestions** | Rule-based and offline. Always shows the raw evidence |
+| **Differentiators** | Root-cause grouping, parent/child trees, per-item batch tracking, run diff, code-change correlation |
+| **Non-goals** | General log search (lnav does it), hosted APM (Sentry/Datadog), AI-first debugging |
 
----
-
-## Phase 0 — Decisions (½ day)
-
-| Action | Outcome |
-|--------|---------|
-| Confirm name (`failtree` / `pipefault`) | PyPI + GitHub reserved |
-| License MIT or Apache-2.0 | `LICENSE` filed |
-| Python 3.9+ | `requires-python` set |
-| Read HLD/LLD | Team aligned |
-
-**Exit:** empty repo with `pyproject.toml`, docs already in `docs/`.
-
----
-
-## Phase 1 — Core (Week 1)
-
-**Goal:** durable storage + trustworthy fingerprints.
-
-| Deliverable | Done when |
-|-------------|-----------|
-| SQLite schema + WAL pragmas | Migrations apply on fresh DB |
-| `Storage` CRUD | Unit tests on temp DB |
-| Fingerprint normalizer | Golden fixture partition passes |
-| Group upsert + example cap | Counts correct under duplicate inserts |
-| Indexes | Explained queries for summary path |
-
-**Do not build:** Tracker, TUI, CLI (except maybe a tiny debug script).
-
-**Exit criteria:**  
-`pytest tests/core` green on 3.9 and 3.12+.
-
----
-
-## Phase 2 — Capture + early CLI (Week 2)
-
-**Goal:** real pipelines can write failures; operators get text reports.
-
-| Deliverable | Done when |
-|-------------|-----------|
-| `walk_exception` | cause/context/ExceptionGroup/cycle tests |
-| `Tracker.item()` | Fake pipeline integration test |
-| Decorator `@track` | Key extraction works |
-| Re-raise vs `continue_on_error` | Both tested |
-| Thread-safe writes | Concurrent test |
-| Multiprocess smoke | N workers no corruption |
-| `failtree summary` | Prints ok/failed/groups |
-| `failtree export` | Retry file matches filters |
-
-**Exit criteria:**  
-`examples/fake_pipeline.py` produces a DB; `summary` + `export` work without Textual.
-
----
-
-## Phase 3 — Viewer (Week 3)
-
-**Goal:** interactive triage.
-
-| Deliverable | Done when |
-|-------------|-----------|
-| Textual app shell | Opens DB, shows header |
-| Lazy tree group→item→error | Expand loads children only |
-| Detail panel | Traceback + metadata |
-| Live refresh | Header updates while run grows |
-| Keys `/` `f` `e` `q` | Documented in help |
-| Optional extra | `pip install failtree[tui]` |
-
-**Exit criteria:**  
-Pilot test: open → expand → quit; manual demo on example DB.
-
----
-
-## Phase 4 — Batch polish (Week 4)
-
-| Deliverable | Done when |
-|-------------|-----------|
-| Stage/status filters in TUI + CLI | Documented |
-| Progress rate in summary | Stable definition |
-| Recovered-attempts reporting | Clear in UX |
-| Richer export filters | `--stage`, `--failed-type`, `--run` |
-| Docs polish | README quickstart accurate |
-
----
-
-## Phase 5 — Release (Week 5)
-
-| Deliverable | Done when |
-|-------------|-----------|
-| Demo GIF | Shows capture → TUI → export |
-| CI (GitHub Actions) | 3.9–3.13 pytest |
-| PyPI publish | `pip install failtree` works |
-| Community posts | r/Python, r/dataengineering, Textual Discord |
-| Feedback loop | Issue templates for grouping misses |
-
----
-
-## Phase 6 — v1.x (after first users)
-
-Priority order:
-
-1. **Impact ranking** — `% of failures` per group (observed probabilities).  
-2. **Pluggable normalizers** — config file / CLI flags.  
-3. **Split / merge groups** — manual override when fingerprinting fails.  
-4. **Secrets redaction** — before persist.  
-5. **Single-writer queue** — if multiprocess stress demands it.  
-6. **Success sampling** — optional, to shrink DB.
-
----
-
-## Phase 7 — Post-v1 faultree crossover
-
-Only when triage UX is solid:
-
-1. OR/AND **gate labels** on aggregate nodes (batch = OR by default).  
-2. Deeper impact analytics (per-stage contribution).  
-3. **Export to faultree JSON** for reliability engineers.  
-4. Revisit web/alerts only with clear demand.
-
----
-
-## Path diagram
+## Roadmap at a glance
 
 ```
-                 Phase 0  Name / license
-                     │
-                     ▼
-                 Phase 1  core  ◄── fingerprint fixtures must pass
-                     │
-                     ▼
-                 Phase 2  capture + CLI ──► useful without TUI (early adopters)
-                     │
-                     ▼
-                 Phase 3  Textual TUI
-                     │
-                     ▼
-                 Phase 4–5  polish + PyPI
-                     │
-                     ▼
-                 v1.x  impact · normalizers · redaction
-                     │
-                     ▼
-                 Post-v1  gates · faultree export
-
-If TUI is delayed, stay on the CLI path — do not block release.
+P0 Foundations ─ P1 Core ─ P2 Capture ─ P3 Viewer ─ P4 Batch ──► v0.1 ALPHA
+                                                                      │
+                               P5 Run diff ─ P6 Code correlation ─ P7 Release ──► v1.0
 ```
 
----
+Estimates assume part-time work and are rough: about **9 weeks to v1.0**, with an alpha around **week 5**.
 
-## What to do **next** (immediate)
+## Current status (repo snapshot)
 
-1. Reserve **failtree** (or chosen name) on GitHub + PyPI.  
-2. Scaffold `src/failtree/core/{models,storage,fingerprint}.py` per LLD.  
-3. Add `tests/fixtures/messy_errors.json` from real pipeline errors if available.  
-4. Implement Phase 1 only — resist Tracker/TUI until fixtures pass.
+| Phase | Status | Notes |
+|---|---|---|
+| P0 Foundations | Done | Name, MIT, `pyproject`, CI, `docs/EVENT_SCHEMA.md`, `ErrorSink` / `SqliteSink` |
+| P1 Core | Done | Schema v2 (+ heartbeat), fingerprint, storage, fixtures |
+| P2 Capture | Done (for test gate) | `init()`, `run(main)`, hooks, redaction, heartbeat, fail-open, `failtree run --` |
+| P3 Viewer | Not started | CLI `summary` / `export` exist; Textual TUI not built |
+| P4 Batch | Partial | status/summary/export exist; ranking/gates optional polish |
+| P5–P7 | Not started | |
 
----
+> Note: `failtree run -- <cmd>` was built early (startup/import crashes). The roadmap below still lists it under “After v1.0” as an optional emphasis area; treat the CLI as already available.
 
-## Success metrics (v1)
+## Phases
 
-| Metric | Target |
-|--------|--------|
-| Time to first capture | &lt; 5 minutes from README |
-| Grouping demo | Example pipeline → ≤ 10 groups from ≥ 200 noisy errors |
-| Export usefulness | Retry file re-runs only failed keys |
-| Star/feedback | Qualitative: “I used this on a real job” |
+### P0: Foundations (week 0)
+- **Check the name** on PyPI and GitHub. Avoid `faultree` and `rootcause`, which already exist
+- Pick the license (**MIT or Apache-2.0**), create the repo, set up CI and `pyproject.toml`
+- Write the **event schema** and the **sink interface**
+- Collect a **test corpus of real, messy errors** from your own pipelines
+
+**Exit:** the repo builds, tests run in CI, and the schema is written down.
+
+### P1: Core (weeks 1-2)
+- SQLite schema: `runs`, `items`, `errors` (with `parent_error_id`), `groups`
+- **Fingerprinting:** normalize messages (strip IDs, numbers, paths, timestamps) and hash with the exception type and top in-project frames
+- Storage layer with batched inserts and indexes
+
+**Exit:** 10,000 synthetic errors collapse into the expected handful of groups, with tests proving it.
+
+> **Make-or-break:** fingerprint quality. Over-grouping hides problems, under-grouping gives no value. Keep raw errors and make the rules adjustable.
+
+### P2: Capture library (weeks 2-3)
+- `failtree.init()` and `failtree.run(main)`
+- `with tracker.item(file, stage=...)` context manager and a decorator form
+- Global hooks: `sys.excepthook`, `threading.excepthook`, `sys.unraisablehook`, a `logging` handler, asyncio handler
+- Walk `__cause__`, `__context__` and `ExceptionGroup` into parent/child records
+- Heartbeat row, thread safety, multiprocessing guidance, redaction hook
+
+**Exit:** a demo pipeline with threads and workers produces correct, complete records, and the library never crashes or blocks the host app.
+
+> **Rule:** the tool must never be the reason your service fails. Fail open.
+
+### P3: Viewer TUI (weeks 3-4)
+- Tree: **group → item → error (with children)**, lazy-loaded on expand
+- Detail panel with traceback, live refresh, search and filters
+- **Multi-database switcher** (view several projects at once)
+- Plain-text `failtree summary` for minimal terminals
+
+**Exit:** open a DB with 100k+ errors and navigate it without lag.
+
+### P4: Batch features (week 5) → **v0.1 alpha release**
+- Item/stage/status tracking (ok, failed, retried, skipped)
+- Run summary ("1,150 ok, 50 failed, 12 retried")
+- **Export failed items as a retry list**
+- Failure-rate ranking and optional OR/AND gate marker on parent errors
+
+**Exit:** release the alpha, share it with a few data engineers, and collect feedback before building the harder features.
+
+### P5: Run diff (week 6)
+- Compare runs by fingerprint: **new / fixed / persisting / regressed**
+- `failtree diff 11 12` and a diff view in the TUI
+
+**Exit:** correct classification on test runs, including count changes (32 → 5).
+
+### P6: Code-change correlation (weeks 7-8)
+- Record the code version per run (`GIT_SHA` baked into the Docker image, or `git rev-parse`, or content hashes as a fallback)
+- Snapshot only the files that appear in tracebacks (deduplicated by hash)
+- Rank changes: same function > same file > imported file, starting with the **root-cause frames**, then the parents
+- UI panel: "Likely related change," with confidence and the raw diff
+
+**Exit:** on a test repo with an injected bug, the tool points at the right commit and function.
+
+> **Honesty rule:** label it correlation, not proof. Show "no related code change found" when that's the truth.
+
+### P7: Hardening and v1.0 release (week 9)
+- README with a demo GIF, quickstart, and docs, plus `CONTRIBUTING.md`
+- Example pipeline, CI across several Python versions
+- Document exactly what gets stored (secrets and redaction)
+- Publish to **PyPI** and announce (r/Python, r/dataengineering, Textual community)
+
+**Exit:** a stranger can install it and see value in under 5 minutes.
+
+## After v1.0 (only if there's demand)
+
+1. `failtree run -- python main.py` wrapper for import and startup crashes *(CLI already exists in this repo — harden/document for production)*
+2. HTTP sink plus a small server for multi-service setups
+3. Log tailing and Docker event watching
+4. Parsers or SDKs for other languages, OpenTelemetry input
+5. Optional plugins: export to faultree JSON, RootCause or LLM-written explanations (opt-in, since they send data out)
+
+## Top risks
+
+| Risk | Plan |
+|---|---|
+| Fingerprinting quality | Test corpus from real pipelines, tunable rules, keep raw data |
+| Hard crashes the library can't see (OOM, `kill -9`) | Heartbeat rows so the viewer shows "last seen X ago"; wrapper mode later |
+| SQLite write contention | WAL, batched writes, single writer thread or queue |
+| Secrets in tracebacks or snapshots | Redaction hook, store minimal data, clear docs |
+| Scope creep into a log platform | Check every feature against the differentiators list |
+| Misleading suggestions | Confidence labels, raw evidence always visible |
+
+## How to know it's working
+
+- You use it on your own pipelines and it replaces digging through log files
+- A 100k-error run is understandable in **under a minute**
+- Setup takes **two lines of code**
+- A few outside users try the alpha and give feedback
+- Early GitHub issues come from real use cases, not feature requests for log search
+
+## Your next three actions
+
+1. **Test P0+P2 on real services** (`init` / `run(main)` / michigan inject / `failtree run --`).
+2. **Push to GitHub** so other services can `pip install git+https://...`.
+3. **Only then start P3** (Textual TUI) — do not begin P5–P7 until alpha feedback.

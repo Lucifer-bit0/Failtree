@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 PRAGMAS = (
     "PRAGMA journal_mode=WAL;",
@@ -18,12 +18,13 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 CREATE TABLE IF NOT EXISTS runs (
-    id          INTEGER PRIMARY KEY,
-    label       TEXT,
-    started_at  TEXT NOT NULL,
-    ended_at    TEXT,
-    status      TEXT NOT NULL DEFAULT 'running',
-    meta_json   TEXT
+    id            INTEGER PRIMARY KEY,
+    label         TEXT,
+    started_at    TEXT NOT NULL,
+    ended_at      TEXT,
+    status        TEXT NOT NULL DEFAULT 'running',
+    meta_json     TEXT,
+    heartbeat_at  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS items (
@@ -67,3 +68,10 @@ CREATE INDEX IF NOT EXISTS idx_errors_item      ON errors(item_id);
 CREATE INDEX IF NOT EXISTS idx_errors_fp        ON errors(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_errors_parent    ON errors(parent_error_id);
 """
+
+# Applied when upgrading an existing DB from older schema versions.
+MIGRATIONS: dict[int, tuple[str, ...]] = {
+    2: (
+        "ALTER TABLE runs ADD COLUMN heartbeat_at TEXT;",
+    ),
+}

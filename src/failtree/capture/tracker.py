@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import functools
 import inspect
+import sys
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, Optional, Sequence, TypeVar
+from typing import Any, Callable, Dict, Iterator, Optional, Pattern, Sequence, TypeVar
 
 from failtree.capture.chains import (
     extract_frames,
@@ -16,11 +18,11 @@ from failtree.capture.chains import (
     walk_exception,
 )
 from failtree.capture.concurrency import write_with_retry
+from failtree.capture.redaction import compile_extra_patterns, redact_text
 from failtree.common.timeutil import utc_now_iso
 from failtree.core.fingerprint import FingerprintConfig, Fingerprinter
-from failtree.core.grouping import GroupService
 from failtree.core.models import ItemStatus, NewError, RunStatus, RunSummary
-from failtree.core.storage import Storage
+from failtree.core.sink import ErrorSink, SqliteSink
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -35,30 +37,35 @@ class ItemHandle:
 
 
 class Tracker:
-    """Capture per-item outcomes into a local SQLite ``runs.db``.
+    """Capture per-item outcomes via an :class:`ErrorSink` (SQLite by default).
 
-    Typical use::
-
-        from failtree import Tracker
-
-        t = Tracker("runs.db", label="nightly", continue_on_error=True)
-        with t:
-            for path in files:
-                with t.item(path, stage="parse"):
-                    process(path)
+    **Fail-open:** persistence problems are logged to stderr and never crash
+    the host application. User exceptions still propagate unless
+    ``continue_on_error=True``.
     """
 
     def __init__(
         self,
-        db_path: str | Path,
+        db_path: str | Path | None = None,
         *,
+        sink: ErrorSink | None = None,
         label: Optional[str] = None,
         project_roots: Sequence[str | Path] | None = None,
         continue_on_error: bool = False,
         fingerprint_config: Optional[FingerprintConfig] = None,
         meta: Optional[Dict[str, Any]] = None,
         sample_cap: int = 5,
+        redact: bool = True,
+        extra_redact_patterns: Sequence[tuple[str, str]] = (),
+        heartbeat_interval: float = 0.0,
     ) -> None:
+        if sink is None:
+            if db_path is None:
+                raise ValueError("Provide db_path or sink")
+            sink = SqliteSink(db_path)
+        elif db_path is not None:
+            raise ValueError("Pass only one of db_path or sink")
+
         roots = tuple(Path(p) for p in (project_roots or ()))
         if fingerprint_config is None:
             fingerprint_config = FingerprintConfig(project_roots=roots)
@@ -73,20 +80,42 @@ class Tracker:
 
         self.continue_on_error = continue_on_error
         self._fingerprinter = Fingerprinter(fingerprint_config)
-        self._storage = Storage(db_path)
-        self._groups = GroupService(self._storage, sample_cap=sample_cap)
-        self._run_id = write_with_retry(
-            lambda: self._storage.create_run(label=label, meta=meta)
+        self._sink = sink
+        self._sample_cap = sample_cap
+        self._redact = redact
+        self._redact_patterns: tuple[tuple[Pattern[str], str], ...] = (
+            compile_extra_patterns(extra_redact_patterns)
         )
         self._closed = False
+        self._run_id = 0
+        self._heartbeat_stop = threading.Event()
+        self._heartbeat_thread: Optional[threading.Thread] = None
+
+        run_id = self._safe(
+            lambda: write_with_retry(
+                lambda: self._sink.start_run(label=label, meta=meta)
+            )
+        )
+        self._run_id = int(run_id or 0)
+
+        if heartbeat_interval and heartbeat_interval > 0 and self._run_id:
+            self._start_heartbeat(heartbeat_interval)
 
     @property
     def run_id(self) -> int:
         return self._run_id
 
     @property
-    def storage(self) -> Storage:
-        return self._storage
+    def sink(self) -> ErrorSink:
+        return self._sink
+
+    @property
+    def storage(self) -> Any:
+        """Backward-compatible access to underlying Storage when using SqliteSink."""
+        storage = getattr(self._sink, "storage", None)
+        if storage is None:
+            raise AttributeError("This sink has no .storage attribute")
+        return storage
 
     def __enter__(self) -> "Tracker":
         return self
@@ -98,42 +127,77 @@ class Tracker:
     def close(self, *, status: RunStatus = RunStatus.COMPLETED) -> None:
         if self._closed:
             return
-        try:
-            write_with_retry(lambda: self._storage.finish_run(self._run_id, status))
-        finally:
-            self._storage.close()
-            self._closed = True
+        self._closed = True
+        self._heartbeat_stop.set()
+        if self._heartbeat_thread is not None:
+            self._heartbeat_thread.join(timeout=1.0)
+            self._heartbeat_thread = None
+        if self._run_id:
+            self._safe(
+                lambda: write_with_retry(
+                    lambda: self._sink.finish_run(self._run_id, status)
+                )
+            )
+        self._safe(self._sink.close)
 
     def summary(self) -> RunSummary:
-        return self._storage.get_summary(self._run_id)
+        if not self._run_id:
+            return RunSummary(
+                run_id=0, total=0, ok=0, failed=0, skipped=0, recovered=0, groups=0
+            )
+        result = self._safe(lambda: self._sink.get_summary(self._run_id))
+        if result is None:
+            return RunSummary(
+                run_id=self._run_id,
+                total=0,
+                ok=0,
+                failed=0,
+                skipped=0,
+                recovered=0,
+                groups=0,
+            )
+        return result
+
+    def heartbeat(self) -> None:
+        if self._run_id and not self._closed:
+            self._safe(
+                lambda: write_with_retry(lambda: self._sink.heartbeat(self._run_id))
+            )
 
     @contextmanager
     def item(self, key: str, *, stage: str = "") -> Iterator[ItemHandle]:
         """Track one unit of work; capture failures automatically."""
-        if self._closed:
-            raise RuntimeError("Tracker is closed")
+        item_id = 0
+        if not self._closed and self._run_id:
+            ensured = self._safe(
+                lambda: write_with_retry(
+                    lambda: self._sink.ensure_item(self._run_id, str(key), stage)
+                )
+            )
+            item_id = int(ensured or 0)
 
-        item_id = write_with_retry(
-            lambda: self._storage.ensure_item(self._run_id, str(key), stage)
-        )
         handle = ItemHandle(item_id=item_id, key=str(key), stage=stage)
         try:
             yield handle
         except Exception as exc:
-            self._persist_failure(item_id, key, stage, exc)
+            if item_id:
+                self._persist_failure(item_id, key, stage, exc)
             if self.continue_on_error:
                 return
             raise
         else:
-            write_with_retry(
-                lambda: self._storage.upsert_item(
-                    self._run_id,
-                    str(key),
-                    stage,
-                    status=ItemStatus.OK,
-                    bump_attempts=True,
+            if item_id:
+                self._safe(
+                    lambda: write_with_retry(
+                        lambda: self._sink.finalize_item(
+                            self._run_id,
+                            str(key),
+                            stage,
+                            status=ItemStatus.OK,
+                            bump_attempts=True,
+                        )
+                    )
                 )
-            )
 
     def track(
         self,
@@ -154,6 +218,25 @@ class Tracker:
 
         return decorator
 
+    def capture_exception(
+        self,
+        exc: BaseException,
+        *,
+        key: str = "__exception__",
+        stage: str = "capture",
+    ) -> None:
+        """Record an exception outside an ``item()`` block (hooks / manual)."""
+        if self._closed or not self._run_id:
+            return
+        item_id = self._safe(
+            lambda: write_with_retry(
+                lambda: self._sink.ensure_item(self._run_id, str(key), stage)
+            )
+        )
+        if not item_id:
+            return
+        self._persist_failure(int(item_id), str(key), stage, exc)
+
     def _persist_failure(
         self,
         item_id: int,
@@ -161,13 +244,15 @@ class Tracker:
         stage: str,
         exc: BaseException,
     ) -> None:
-        write_with_retry(
-            lambda: self._storage.upsert_item(
-                self._run_id,
-                str(key),
-                stage,
-                status=ItemStatus.FAILED,
-                bump_attempts=True,
+        self._safe(
+            lambda: write_with_retry(
+                lambda: self._sink.finalize_item(
+                    self._run_id,
+                    str(key),
+                    stage,
+                    status=ItemStatus.FAILED,
+                    bump_attempts=True,
+                )
             )
         )
 
@@ -181,9 +266,16 @@ class Tracker:
         payload: list[NewError] = []
         for index, node in enumerate(nodes):
             frames = extract_frames(node.exc)
+            raw_message = str(node.exc)
+            raw_tb = format_exception_text(node.exc)
+            if self._redact:
+                raw_message = redact_text(
+                    raw_message, extra_patterns=self._redact_patterns
+                )
+                raw_tb = redact_text(raw_tb, extra_patterns=self._redact_patterns)
             result = self._fingerprinter.fingerprint(
                 type(node.exc).__name__,
-                str(node.exc),
+                raw_message,
                 frames,
             )
             results.append(result)
@@ -198,30 +290,54 @@ class Tracker:
                     parent_error_id=parent_ref,
                     depth=node.depth,
                     exc_type=type(node.exc).__name__,
-                    message=str(node.exc),
+                    message=raw_message,
                     normalized_message=result.normalized_message,
-                    traceback=format_exception_text(node.exc),
+                    traceback=raw_tb,
                     fingerprint=result.fingerprint,
                     ts=ts,
                     is_group_root=index in leaves,
                 )
             )
 
-        error_ids = write_with_retry(lambda: self._storage.insert_errors(payload))
+        error_ids = self._safe(
+            lambda: write_with_retry(lambda: self._sink.insert_errors(payload))
+        )
+        if not error_ids:
+            return
         for index, error_id in enumerate(error_ids):
             if index not in leaves:
                 continue
             result = results[index]
 
             def _bump(eid: int = error_id, res: Any = result) -> None:
-                self._groups.bump(
+                self._sink.bump_group(
                     fingerprint=res.fingerprint,
                     title=res.title,
                     error_id=eid,
                     ts=ts,
+                    sample_cap=self._sample_cap,
                 )
 
-            write_with_retry(_bump)
+            self._safe(lambda: write_with_retry(_bump))
+
+    def _start_heartbeat(self, interval: float) -> None:
+        def _loop() -> None:
+            while not self._heartbeat_stop.wait(interval):
+                self.heartbeat()
+
+        self._heartbeat_thread = threading.Thread(
+            target=_loop, name="failtree-heartbeat", daemon=True
+        )
+        self._heartbeat_thread.start()
+
+    @staticmethod
+    def _safe(fn: Callable[[], Any], default: Any = None) -> Any:
+        """Fail-open: never let sink failures kill the host app."""
+        try:
+            return fn()
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"failtree: {exc}", file=sys.stderr)
+            return default
 
 
 def _resolve_item_key(

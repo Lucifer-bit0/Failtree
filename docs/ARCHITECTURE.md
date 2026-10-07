@@ -16,7 +16,35 @@ Companion exploration notes live in the Cursor canvas review (product positionin
 
 ## One-sentence product
 
-Wrap each unit of work in a data pipeline, capture failures locally into SQLite, group root causes, show exception trees in a TUI, and export a retry list — no server, no SaaS.
+Wrap a service’s `main` (and each unit of work) so failures — including boot/import issues via an outer launcher — land in local SQLite, grouped by root cause, with CLI/TUI/API triage.
+
+---
+
+## Integration model (how other services plug in)
+
+```
+Docker / server ENTRYPOINT
+        │
+        │  failtree run --db /data/runs.db -- python -m my_service
+        │  (catches import/syntax/exit of the child process)
+        ▼
+┌─────────────────── my_service ───────────────────┐
+│  from failtree import run, get_tracker           │
+│  def main():                                     │
+│      t = get_tracker()                           │
+│      with t.item(...): ...                       │
+│  run(main, db_path=...)   # Tracker before main  │
+└──────────────────────────────────────────────────┘
+        │
+        ▼
+   runs.db  ◄──── future: HTTP API / UI (list runs, groups, errors)
+```
+
+| Layer | Catches |
+|-------|---------|
+| `failtree.run(main)` | Failures inside `main` + imports triggered from `main` |
+| `failtree run -- cmd` | Child process import/syntax/crash before app code runs |
+| Future HTTP API | Read same DB from other services / dashboards |
 
 ---
 
@@ -25,13 +53,13 @@ Wrap each unit of work in a data pipeline, capture failures locally into SQLite,
 ```
   Your pipeline code
         │
-        │  from failtree import Tracker
-        │  with t.item(key, stage="parse"): ...
+        │  from failtree import run, get_tracker
+        │  run(main)  /  with t.item(key, stage="parse"): ...
         ▼
   ┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
   │   capture   │────▶│      core        │◀────│     viewer      │
   │ Tracker API │     │ models · storage │     │ Textual TUI     │
-  │ chains      │     │ fingerprint      │     │ + CLI summary   │
+  │ bootstrap   │     │ fingerprint      │     │ + CLI summary   │
   └─────────────┘     └────────┬─────────┘     └─────────────────┘
                                │
                                ▼
@@ -44,8 +72,22 @@ Three layers stay separate so each can be tested alone:
 | Layer | Responsibility | Depends on |
 |-------|----------------|------------|
 | **core** | Data model, SQLite, fingerprinting, queries | stdlib + `exceptiongroup` (backport) |
-| **capture** | User-facing Tracker / decorator / chains | core |
+| **capture** | User-facing Tracker / decorator / chains / bootstrap | core (via **sink** interface) |
 | **viewer** | Textual TUI + plain CLI | core (never capture) |
+
+### Sink interface (future-proofing)
+
+Capture must not talk to SQLite types directly forever. Introduce an `ErrorSink` protocol:
+
+```
+capture (Tracker / hooks)
+        │  emit(run/item/error events)
+        ▼
+   ErrorSink  ──► SqliteSink (v1)
+              └──► HttpSink  (later server)
+```
+
+Refactor target: `Storage` implements `ErrorSink`; Tracker depends on the protocol only. See [ROADMAP.md](./ROADMAP.md).
 
 ---
 
